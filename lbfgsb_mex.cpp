@@ -5,6 +5,8 @@
 #include <string.h>
 #include "mex.h"
 
+const int LBFGSB_TASK_SIZE = 60;
+
 mxArray *rhs[2];
 
 const int    defaultm          = 5;
@@ -12,6 +14,14 @@ const int    defaultmaxiter    = 20;
 const double defaultfactr      = 1e7;
 const double defaultpgtol      = 1e-5;
 const int    defaultprintlevel = -1;
+
+enum lbfgsb_res_t {
+	CONVERGED, 
+	ABNORMAL_TERMINATION,
+	ERROR,
+	MAX_ITER,
+	UNHANDLED
+};
 
 // objective & gradient evaluation function
 typedef double (*lbfgsb_eval_t)(const int N, const double *x, double *g);
@@ -57,7 +67,7 @@ private:
 	// These are structures used by the L-BFGS-B routine.
 	double* wa;
 	int*    iwa;
-	char    task[60];
+	char    task[LBFGSB_TASK_SIZE+1];
 	char    csave[60];
 	bool    lsave[4];
 	int     isave[44];
@@ -71,7 +81,7 @@ public:
 	~LBFGSB(void);
 	void call(const char* cmd  = NULL);
 	bool isTask(const char* cstr);
-	double solve(void);
+	lbfgsb_res_t solve(double& );
 };
 
 void LBFGSB::init(int n, double *x, double *lb, double *ub, 
@@ -87,6 +97,10 @@ void LBFGSB::init(int n, double *x, double *lb, double *ub,
 	this->pgtol   = op->pgtol;
 	this->iprint  = defaultprintlevel;
 	
+	for (int i = 0; i < LBFGSB_TASK_SIZE; i++)
+		task[i] = ' ';
+	
+	task[LBFGSB_TASK_SIZE] = '\0';
 	/* set evaluation function */
 	this->eval_func = eval;
 	this->iter_func = op->iter;
@@ -97,7 +111,7 @@ void LBFGSB::init(int n, double *x, double *lb, double *ub,
 	
 	f   = 0;
 	g   = new double[n];
-	wa  = new double[2*m*n + 11*m*m + 5*n + 8*m];
+	wa  = new double[(2*m*n + 11*m*m + 5*n + 8*m)];
 	iwa = new int[3*n];
 }
 
@@ -127,8 +141,8 @@ void LBFGSB::call(const char* cmd) {
 		int nsource = strlen(cmd);
 		// Only perform the copy if the source can fit into the destination.
 		if (nsource < 60) {
-			// Copy the string.
-			strcpy(task,cmd);
+			for(int i = 0; i < nsource; i++)
+				task[i] = cmd[i];
 
 			// Fill in the rest of the string with blanks.
 			for (int i = nsource; i < 60; i++)
@@ -143,7 +157,8 @@ bool LBFGSB::isTask(const char* cstr) {
   return !strncmp(task,cstr,strlen(cstr));
 }
 
-double LBFGSB::solve(void) {
+lbfgsb_res_t LBFGSB::solve(double& fc) {
+	lbfgsb_res_t res = UNHANDLED;
 	// Initialize the objective function and gradient to zero.
 	f = 0;
 	for (int i = 0; i < n; i++)
@@ -166,19 +181,26 @@ double LBFGSB::solve(void) {
 			
 			if (t == maxiter) {
 				call("STOP");
+				res = MAX_ITER;
 				break;
 			}
-		} else if (isTask("CONV"))
+		} else if (isTask("CONV")) {
+			res = CONVERGED;
 			break;
-		else if (isTask("ABNO")) {
+		} else if (isTask("ABNO")) {
+			//mexPrintf("Task: %s\n", task);
+			res = ABNORMAL_TERMINATION;
 			break;
 		} else if (isTask("ERROR")) {
+			//mexPrintf("Task: %s\n", task);
+			res = ERROR;
 			break;
 		}
 		// Call L-BFGS again.
 		call();
 	}
-	return f;
+	fc = f;
+	return res;
 }
 
 static double evaluate(const int n, const double *x, double *g) {
@@ -248,12 +270,39 @@ void mexFunction(int nlhs, mxArray *plhs[],
 
 	LBFGSB lfbsgb(N, x, lb, ub, evaluate, &op);
     
-	fx = lfbsgb.solve();
+	lbfgsb_res_t res = lfbsgb.solve(fx);
+	mxArray *res_str;
+	switch(res) {
+		case CONVERGED:
+			mexPrintf("L-BFGS-B converged\n");
+			res_str = mxCreateString("converged");
+			break;
+		case ABNORMAL_TERMINATION:
+			mexPrintf("L-BFGS-B abnormal termination\n");
+			res_str = mxCreateString("abnormal termination");
+			break;
+		case ERROR:
+			mexPrintf("L-BFGS-B error\n");
+			res_str = mxCreateString("error");
+			break;
+		case MAX_ITER:
+			mexPrintf("L-BFGS-B max iterations reached\n");
+			res_str = mxCreateString("max iterations reached");
+			break;
+		case UNHANDLED:
+		default:
+			mexWarnMsgTxt("Unknown result state");
+			res_str = mxCreateString("Unknown result state");
+			break;
+	}
     
     // Allocate outputs
     plhs[0] = mxCreateDoubleMatrix(N,1,mxREAL);
-    plhs[1] = mxCreateDoubleScalar(fx); 
-    
+	if(nlhs > 1)
+		plhs[1] = mxCreateDoubleScalar(fx);
+	
+    if(nlhs > 2)
+		plhs[2] = mxCreateDoubleScalar(res);
     // Copy current iterate to output
     memcpy(mxGetPr(plhs[0]),x,N*sizeof(double));
 }

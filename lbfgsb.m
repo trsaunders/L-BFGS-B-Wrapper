@@ -1,4 +1,4 @@
-function [x,fx] = lbfgsb(f,x0,lb, ub, varargin)
+function [x,fx,res] = lbfgsb(f,x0,lb, ub, varargin)
 	% L-BGFS-B
 
 	% check that the bounds vectors are the same length as input
@@ -16,8 +16,9 @@ function [x,fx] = lbfgsb(f,x0,lb, ub, varargin)
 	o.addParamValue('factr', 1e7, @isnumeric);
 	o.addParamValue('m', 5, @isnumeric);
 	o.addParamValue('pgtol', 1e-5, @isnumeric);
+	%o.addParamValue('verbose', 1, @isnumeric);
 	o.parse(varargin{:});
 
 	% Call mex function
-	[x,fx] = lbfgsb_(f, x0(:), lb(:), ub(:), o.Results);
+	[x] = lbfgsb_(f, x0(:), lb(:), ub(:), o.Results);
 end
